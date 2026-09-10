@@ -14,6 +14,7 @@ Run locally:
 
 import os
 import smtplib
+import logging
 from email.message import EmailMessage
 from typing import Optional
 
@@ -21,6 +22,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()  # no-op in production if you set real env vars on the host instead
 
@@ -75,24 +80,39 @@ def send_email(payload: ContactPayload) -> None:
         f"Message:\n{payload.message}\n"
     )
 
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_password)
-        server.send_message(msg)
+    logger.info(f"Attempting to send email via {smtp_host}:{smtp_port}")
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            logger.info("Connected to SMTP server")
+            server.starttls()
+            logger.info("STARTTLS successful")
+            server.login(smtp_user, smtp_password)
+            logger.info(f"Logged in as {smtp_user}")
+            server.send_message(msg)
+            logger.info(f"Email sent successfully to {to_address}")
+    except smtplib.SMTPException as exc:
+        logger.error(f"SMTP error: {type(exc).__name__}: {str(exc)}")
+        raise
+    except Exception as exc:
+        logger.error(f"Unexpected error: {type(exc).__name__}: {str(exc)}")
+        raise
 
 
 @app.post("/api/contact")
 def contact(payload: ContactPayload):
     # Honeypot tripped — pretend success, do nothing.
     if payload.website:
+        logger.info("Honeypot triggered, ignoring submission")
         return {"ok": True}
 
     try:
         send_email(payload)
     except RuntimeError as exc:
         # Config problem — surface clearly in server logs, generic message to the client.
+        logger.error(f"Config error: {str(exc)}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover — network/SMTP failures
+        logger.error(f"Failed to send email: {type(exc).__name__}: {str(exc)}", exc_info=True)
         raise HTTPException(
             status_code=502, detail="Could not send the message right now."
         ) from exc
