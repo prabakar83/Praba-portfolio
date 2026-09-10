@@ -15,6 +15,7 @@ Run locally:
 import os
 import smtplib
 import logging
+import socket
 from email.message import EmailMessage
 from typing import Optional
 
@@ -26,6 +27,8 @@ from pydantic import BaseModel, EmailStr, Field
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# Also log SMTP details
+logging.getLogger("smtplib").setLevel(logging.DEBUG)
 
 load_dotenv()  # no-op in production if you set real env vars on the host instead
 
@@ -82,19 +85,29 @@ def send_email(payload: ContactPayload) -> None:
 
     logger.info(f"Attempting to send email via {smtp_host}:{smtp_port}")
     try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            logger.info("Connected to SMTP server")
+        # Set socket timeout to prevent hanging
+        socket.setdefaulttimeout(10)
+        
+        logger.info(f"Creating SMTP connection to {smtp_host}:{smtp_port}")
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+            logger.info("Connected to SMTP server, attempting STARTTLS")
             server.starttls()
-            logger.info("STARTTLS successful")
+            logger.info("STARTTLS successful, attempting login")
             server.login(smtp_user, smtp_password)
-            logger.info(f"Logged in as {smtp_user}")
+            logger.info(f"Logged in as {smtp_user}, sending message")
             server.send_message(msg)
             logger.info(f"Email sent successfully to {to_address}")
+    except socket.timeout:
+        logger.error(f"Socket timeout connecting to {smtp_host}:{smtp_port}")
+        raise RuntimeError(f"SMTP connection timeout to {smtp_host}:{smtp_port}")
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.error(f"SMTP authentication failed: {str(exc)}")
+        raise RuntimeError(f"SMTP authentication failed: check SMTP_USER and SMTP_PASSWORD")
     except smtplib.SMTPException as exc:
         logger.error(f"SMTP error: {type(exc).__name__}: {str(exc)}")
         raise
     except Exception as exc:
-        logger.error(f"Unexpected error: {type(exc).__name__}: {str(exc)}")
+        logger.error(f"Unexpected error: {type(exc).__name__}: {str(exc)}", exc_info=True)
         raise
 
 
@@ -108,8 +121,8 @@ def contact(payload: ContactPayload):
     try:
         send_email(payload)
     except RuntimeError as exc:
-        # Config problem — surface clearly in server logs, generic message to the client.
-        logger.error(f"Config error: {str(exc)}")
+        # Config problem or timeout — surface clearly in server logs
+        logger.error(f"Config/timeout error: {str(exc)}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover — network/SMTP failures
         logger.error(f"Failed to send email: {type(exc).__name__}: {str(exc)}", exc_info=True)
