@@ -13,22 +13,18 @@ Run locally:
 """
 
 import os
-import smtplib
 import logging
-import socket
-from email.message import EmailMessage
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
+import resend
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-# Also log SMTP details
-logging.getLogger("smtplib").setLevel(logging.DEBUG)
 
 load_dotenv()  # no-op in production if you set real env vars on the host instead
 
@@ -58,24 +54,20 @@ class ContactPayload(BaseModel):
 
 
 def send_email(payload: ContactPayload) -> None:
-    smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_password = os.environ.get("SMTP_PASSWORD")
+    resend_api_key = os.environ.get("RESEND_API_KEY")
     to_address = os.environ.get("CONTACT_TO_EMAIL", "Prabakarmadhanagopal@gmail.com")
+    # Use Resend's test domain during development (onboarding@resend.dev)
+    # After verifying your domain, change to your custom domain
+    from_address = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
 
-    if not all([smtp_host, smtp_user, smtp_password]):
+    if not resend_api_key:
         raise RuntimeError(
-            "SMTP is not configured — set SMTP_HOST, SMTP_USER and "
-            "SMTP_PASSWORD (see .env.example)."
+            "Resend API key not configured — set RESEND_API_KEY in environment"
         )
 
-    msg = EmailMessage()
-    msg["Subject"] = f"Portfolio contact — {payload.name} ({payload.reason})"
-    msg["From"] = smtp_user
-    msg["To"] = to_address
-    msg["Reply-To"] = payload.email
-    msg.set_content(
+    resend.api_key = resend_api_key
+    
+    email_body = (
         f"Name: {payload.name}\n"
         f"Email: {payload.email}\n"
         f"Company: {payload.company or '—'}\n"
@@ -83,31 +75,20 @@ def send_email(payload: ContactPayload) -> None:
         f"Message:\n{payload.message}\n"
     )
 
-    logger.info(f"Attempting to send email via {smtp_host}:{smtp_port}")
+    logger.info(f"Attempting to send email via Resend to {to_address}")
     try:
-        # Set socket timeout to prevent hanging
-        socket.setdefaulttimeout(10)
-        
-        logger.info(f"Creating SMTP connection to {smtp_host}:{smtp_port}")
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-            logger.info("Connected to SMTP server, attempting STARTTLS")
-            server.starttls()
-            logger.info("STARTTLS successful, attempting login")
-            server.login(smtp_user, smtp_password)
-            logger.info(f"Logged in as {smtp_user}, sending message")
-            server.send_message(msg)
-            logger.info(f"Email sent successfully to {to_address}")
-    except socket.timeout:
-        logger.error(f"Socket timeout connecting to {smtp_host}:{smtp_port}")
-        raise RuntimeError(f"SMTP connection timeout to {smtp_host}:{smtp_port}")
-    except smtplib.SMTPAuthenticationError as exc:
-        logger.error(f"SMTP authentication failed: {str(exc)}")
-        raise RuntimeError(f"SMTP authentication failed: check SMTP_USER and SMTP_PASSWORD")
-    except smtplib.SMTPException as exc:
-        logger.error(f"SMTP error: {type(exc).__name__}: {str(exc)}")
-        raise
+        result = resend.Emails.send(
+            {
+                "from": from_address,
+                "to": to_address,
+                "subject": f"Portfolio contact — {payload.name} ({payload.reason})",
+                "text": email_body,
+                "reply_to": payload.email,
+            }
+        )
+        logger.info(f"Email sent successfully via Resend. Message ID: {result.get('id')}")
     except Exception as exc:
-        logger.error(f"Unexpected error: {type(exc).__name__}: {str(exc)}", exc_info=True)
+        logger.error(f"Failed to send email via Resend: {type(exc).__name__}: {str(exc)}", exc_info=True)
         raise
 
 
