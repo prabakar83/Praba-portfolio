@@ -56,8 +56,6 @@ class ContactPayload(BaseModel):
 def send_email(payload: ContactPayload) -> None:
     resend_api_key = os.environ.get("RESEND_API_KEY")
     to_address = os.environ.get("CONTACT_TO_EMAIL", "Prabakarmadhanagopal@gmail.com")
-    # Use Resend's test domain during development (onboarding@resend.dev)
-    # After verifying your domain, change to your custom domain
     from_address = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
 
     if not resend_api_key:
@@ -68,11 +66,13 @@ def send_email(payload: ContactPayload) -> None:
     resend.api_key = resend_api_key
     
     email_body = (
-        f"Name: {payload.name}\n"
-        f"Email: {payload.email}\n"
-        f"Company: {payload.company or '—'}\n"
-        f"Reason: {payload.reason}\n\n"
-        f"Message:\n{payload.message}\n"
+        f"<h2>New Portfolio Contact Message</h2>\n"
+        f"<p><b>Name:</b> {payload.name}</p>\n"
+        f"<p><b>Email:</b> {payload.email}</p>\n"
+        f"<p><b>Company:</b> {payload.company or '—'}</p>\n"
+        f"<p><b>Reason:</b> {payload.reason}</p>\n"
+        f"<h3>Message:</h3>\n"
+        f"<p>{payload.message}</p>\n"
     )
 
     logger.info(f"Attempting to send email via Resend to {to_address}")
@@ -80,10 +80,10 @@ def send_email(payload: ContactPayload) -> None:
         result = resend.Emails.send(
             {
                 "from": from_address,
-                "to": to_address,
-                "subject": f"Portfolio contact — {payload.name} ({payload.reason})",
-                "text": email_body,
+                "to": [to_address],
                 "reply_to": payload.email,
+                "subject": f"Portfolio Contact — {payload.name} ({payload.reason})",
+                "html": email_body,
             }
         )
         logger.info(f"Email sent successfully via Resend. Message ID: {result.get('id')}")
